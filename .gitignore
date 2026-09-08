@@ -17,6 +17,7 @@ pip-wheel-metadata/
 
 # ── Secrets & environment ──────────────────────────────────────────────────
 .env
+.env.*
 *.env
 !.env.example
 *.pem
@@ -29,6 +30,8 @@ pip-wheel-metadata/
 *.wav
 *.mp3
 *.pcm
+diagnostics/memory/
+diagnostics/tools/*.jsonl
 
 # ── Claude Code settings ───────────────────────────────────────────────────
 .claude/settings.local.json

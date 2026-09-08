@@ -1,0 +1,89 @@
+name: Supabase Keepalive
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs every 3 days at 03:20 UTC.
+    # This is frequent enough to avoid week-long inactivity.
+    - cron: "20 3 */3 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping-supabase:
+    name: Ping Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_KEEPALIVE_TABLE: ${{ secrets.SUPABASE_KEEPALIVE_TABLE || 'aura_keepalive' }}
+
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ]; then
+            echo "Missing required secret: SUPABASE_URL"
+            exit 1
+          fi
+
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "Missing required secret: SUPABASE_SERVICE_ROLE_KEY"
+            exit 1
+          fi
+
+          echo "Supabase keepalive secrets are configured."
+
+      - name: Ping Supabase keepalive table
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NOW="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          TABLE="${SUPABASE_KEEPALIVE_TABLE:-aura_keepalive}"
+          ENDPOINT="${SUPABASE_URL}/rest/v1/${TABLE}?id=eq.1"
+
+          echo "Running Supabase keepalive at ${NOW}"
+          echo "Target table: ${TABLE}"
+
+          HTTP_STATUS="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --request PATCH "${ENDPOINT}" \
+              --connect-timeout 15 \
+              --max-time 30 \
+              --header "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              --header "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              --header "Content-Type: application/json" \
+              --header "Prefer: return=minimal" \
+              --data "{\"touched_at\":\"${NOW}\",\"source\":\"github_actions\",\"note\":\"A.U.R.A scheduled Supabase keepalive\"}" \
+              --output /tmp/supabase_keepalive_response.txt \
+              --write-out "%{http_code}"
+          )"
+
+          echo "Supabase keepalive HTTP status: ${HTTP_STATUS}"
+
+          if [ "${HTTP_STATUS}" = "404" ]; then
+            echo "Supabase keepalive table was not found."
+            echo "Run docs/supabase/aura_keepalive_schema.sql in the Supabase SQL Editor, then rerun this workflow."
+            exit 1
+          fi
+
+          if [ "${HTTP_STATUS}" -lt 200 ] || [ "${HTTP_STATUS}" -ge 300 ]; then
+            echo "Supabase keepalive failed."
+            echo "Response body redacted by default. Check Supabase table, REST API status, and repository secrets."
+            exit 1
+          fi
+
+          echo "Supabase keepalive succeeded."
