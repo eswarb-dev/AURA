@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { safeRemoveOwnedNode } from "./domCleanup";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
@@ -8,7 +9,7 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 /**
  * Holographic wireframe orb — ported from the ULTRON orb UI
  * (github.com/SAGAR-TAMANG/ultron-by-sagar-builds, MIT) and extended with
- * JARVIS state modulation: the scene reads live assistant state through
+ * A.U.R.A state modulation: the scene reads live assistant state through
  * `getState()` every frame and drives bloom, core surge, rotation speed,
  * and color grade from it (speaking / listening / thinking / wake / mode).
  */
@@ -687,7 +688,7 @@ export function createOrbScene(
   }
 
   // ═══════════════════════════════════════════════
-  // ANIMATION — with JARVIS state modulation
+  // ANIMATION — with A.U.R.A state modulation
   // ═══════════════════════════════════════════════
   const clock = new THREE.Clock();
   let flickerTimer = 0;
@@ -703,7 +704,7 @@ export function createOrbScene(
     rafId = requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
 
-    // ── Read live JARVIS state ──
+    // ── Read live A.U.R.A state ──
     const st = getState();
     const speaking = st.speaking;
     const listening = st.listening;
@@ -857,6 +858,7 @@ export function createOrbScene(
 
   // ——— CLEANUP ———
   function dispose() {
+    if (disposed) return;
     disposed = true;
     cancelAnimationFrame(rafId);
     window.removeEventListener("resize", onResize);
@@ -874,7 +876,7 @@ export function createOrbScene(
     });
     composer.dispose();
     renderer.dispose();
-    renderer.domElement.remove();
+    safeRemoveOwnedNode(renderer.domElement, container);
   }
 
   return {

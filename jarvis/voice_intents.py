@@ -19,6 +19,127 @@ log = logging.getLogger("jarvis.voice_intents")
 
 SendFn = Callable[[dict[str, Any]], Awaitable[None]]
 
+AURA_WAKE_ALIASES = [
+    "wakeup", "wake up", "wake-up", "wake up aura", "wake up a u r a",
+    "aura", "a u r a", "a.u.r.a", "hey aura", "hey a u r a",
+    "hello aura", "ok aura", "okay aura", "ora", "hey ora",
+    "aurora", "hey aurora", "aira", "hey aira", "ara", "hey ara",
+    "oura", "hey oura", "cosmo", "hey cosmo", "abba", "hey abba",
+    "eva", "hey eva", "ada", "hey ada",
+]
+_KNOWN_MISTAKES = {"makeup", "wake", "wake-up", "ora", "aurora", "aira", "ara", "oura", "cosmo", "abba", "eva", "ada"}
+_NOISE = {"uh", "um", "hmm", "..."}
+
+
+def _clean_for_wake(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", re.sub(r"[.,!?;:-]+", " ", text.strip().lower())).strip()
+    replacements = (
+        (r"\bcrhome\b", "chrome"),
+        (r"\bcrome\b", "chrome"),
+        (r"\bchrom\b", "chrome"),
+        (r"\bchrome\s+tap\b", "chrome tab"),
+        (r"\bsystme\b", "system"),
+    )
+    for pattern, value in replacements:
+        cleaned = re.sub(pattern, value, cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def similarity(a: str, b: str) -> float:
+    left = _clean_for_wake(a)
+    right = _clean_for_wake(b)
+    if not left and not right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    return 1.0 - (_levenshtein(left, right) / max(len(left), len(right)))
+
+
+def _find_phrase(words: list[str], phrase: list[str]) -> int:
+    if not phrase:
+        return -1
+    for i in range(0, len(words) - len(phrase) + 1):
+        if words[i:i + len(phrase)] == phrase:
+            return i
+    return -1
+
+
+def _replace_alias(text: str, alias: str) -> str:
+    words = text.split()
+    alias_words = alias.split()
+    idx = _find_phrase(words, alias_words)
+    if idx < 0:
+        return text
+    before = [w for w in words[:idx] if w not in {"hey", "hello", "ok", "okay"}]
+    after = words[idx + len(alias_words):]
+    return " ".join([*before, "hey", "aura", *after]).strip()
+
+
+def normalize_aura_transcript(text: str) -> dict[str, Any]:
+    """Normalize common STT wake-name mistakes while preserving raw text."""
+    raw = (text or "").strip()
+    cleaned = _clean_for_wake(raw)
+    if not cleaned or cleaned in _NOISE:
+        return {
+            "raw": raw,
+            "normalized": cleaned,
+            "wake_detected": False,
+            "alias_matched": None,
+            "confidence_hint": "low",
+        }
+
+    for alias in sorted(AURA_WAKE_ALIASES, key=len, reverse=True):
+        alias_clean = _clean_for_wake(alias)
+        if _find_phrase(cleaned.split(), alias_clean.split()) >= 0:
+            matched = re.sub(r"^(hey|hello|ok|okay)\s+", "", alias_clean)
+            return {
+                "raw": raw,
+                "normalized": _replace_alias(cleaned, alias_clean),
+                "wake_detected": True,
+                "alias_matched": matched,
+                "confidence_hint": "medium" if matched in _KNOWN_MISTAKES else "high",
+            }
+
+    words = cleaned.split()
+    for word in words:
+        if similarity(word, "aura") >= 0.65:
+            return {
+                "raw": raw,
+                "normalized": _replace_alias(cleaned, word),
+                "wake_detected": True,
+                "alias_matched": word,
+                "confidence_hint": "low",
+            }
+
+    if similarity(" ".join(words[:2]), "hey aura") >= 0.65:
+        return {
+            "raw": raw,
+            "normalized": " ".join(["hey", "aura", *words[2:]]).strip(),
+            "wake_detected": True,
+            "alias_matched": " ".join(words[:2]),
+            "confidence_hint": "low",
+        }
+
+    return {
+        "raw": raw,
+        "normalized": cleaned,
+        "wake_detected": False,
+        "alias_matched": None,
+        "confidence_hint": "low",
+    }
+
 
 # Each pattern is (regex, intent_name). First match wins. Patterns are
 # intentionally specific so we never false-positive on normal chat.

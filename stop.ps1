@@ -1,4 +1,4 @@
-﻿# JARVIS — graceful shutdown. Stops the JARVIS voice server, the Hermes
+# A.U.R.A — graceful shutdown. Stops the A.U.R.A voice server, the Hermes
 # gateway, and any background MCP servers they spawned. Reads PIDs from
 # .\.jarvis.pids if present, otherwise kills anything python that matches.
 
@@ -11,11 +11,11 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PidFile = Join-Path $ScriptDir '.jarvis.pids'
 
-function Write-Status($msg) { Write-Host "[jarvis] $msg" -ForegroundColor Cyan }
+function Write-Status($msg) { Write-Host "[aura] $msg" -ForegroundColor Cyan }
 
 if ($Force) { Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Out-Null }
 
-Write-Status "Stopping JARVIS voice server ..."
+Write-Status "Stopping A.U.R.A voice server ..."
 $Svc = Get-Service 'JarvisVoiceServer' -ErrorAction SilentlyContinue
 if ($Svc) {
     if ($Svc.Status -eq 'Running') {
@@ -25,8 +25,9 @@ if ($Svc) {
     }
 }
 # Also kill any foreground uvicorn (in case the service isn't installed
-# or someone started it manually).
-Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+# or someone started it manually). Windows venv launchers can appear as
+# uvicorn.exe, not python.exe.
+Get-CimInstance Win32_Process |
     Where-Object { $_.CommandLine -like '*uvicorn*' -or $_.CommandLine -like '*jarvis.main*' } |
     ForEach-Object {
         Write-Status "  killing uvicorn PID $($_.ProcessId)"
@@ -51,4 +52,4 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 
 if (Test-Path $PidFile) { Remove-Item $PidFile -Force -ErrorAction SilentlyContinue }
 
-Write-Status "All JARVIS-related processes stopped."
+Write-Status "All A.U.R.A-related processes stopped."

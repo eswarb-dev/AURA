@@ -43,8 +43,69 @@ _EMOJI_RE          = re.compile(
 _TOOL_ARTIFACT_RE  = re.compile(r"\[tool_(?:call|result):[^\]]*\]")
 _EXTRA_PUNCT_RE    = re.compile(r"[*_`#>|\\]+")
 _WHITESPACE_RE     = re.compile(r"\s+")
+_AURA_DOTTED_RE    = re.compile(r"\bA\s*\.\s*U\s*\.\s*R\s*\.\s*A\b", re.IGNORECASE)
+_AURA_SPACED_RE    = re.compile(r"\bA\s+U\s+R\s+A\b", re.IGNORECASE)
+_AURA_WORD_RE      = re.compile(r"\bAURA\b", re.IGNORECASE)
+TTS_PRONUNCIATION_ALIAS_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "trustee_name",
+        (
+            ("Shri. Sundar Ramakrishnan", "Shree Sundher Ramakrishnan"),
+            ("Sri. Sundar Ramakrishnan", "Shree Sundher Ramakrishnan"),
+            ("Sundar Ramakrishnan", "Sundher Ramakrishnan"),
+            ("Shri.", "Shree"),
+            ("Sri.", "Shree"),
+        ),
+    ),
+    (
+        "principal_name",
+        (
+            ("Dr. A. Soundarrajan", "Doctor Ay Soundarrajan"),
+            ("A. Soundarrajan", "Ay Soundarrajan"),
+            ("Dr.", "Doctor"),
+        ),
+    ),
+)
 
 MAX_TTS_CHARS = 550
+
+
+def general_talk_chunks(text: str) -> list[str]:
+    """Select complete sentences for speech without changing the displayed answer."""
+    def limit(name: str, default: int, minimum: int) -> int:
+        try:
+            return max(minimum, min(default, int(os.environ.get(name, default))))
+        except ValueError:
+            return default
+
+    sentence_limit = limit('AURA_GENERAL_TALK_MAX_SENTENCES', 4, 1)
+    char_limit = limit('AURA_GENERAL_TALK_MAX_CHARS', 650, 100)
+    chunk_limit = limit('AURA_CARTESIA_CHUNK_MAX_CHARS', 220, 40)
+    clean = sanitize_text_for_tts(strip_for_tts(text)).translate(str.maketrans({
+        '\u2014': ', ', '\u2013': ', ', '\u2011': '-', '\u00a0': ' ',
+        '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
+    }))
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    sentences = [part for part in re.split(r'(?<=[.!?])\s+', clean) if re.search(r'[.!?]["\']?$', part)]
+    selected: list[str] = []
+    for sentence in sentences[:sentence_limit]:
+        sentence = sentence.strip()
+        if sum(map(len, selected)) + len(selected) + len(sentence) > char_limit:
+            break
+        selected.append(sentence)
+    chunks: list[str] = []
+    for sentence in selected:
+        current = ''
+        for word in sentence.split():
+            if len(word) > chunk_limit:
+                return chunks  # Never split a token into an unfinished spoken word.
+            if current and len(current) + len(word) + 1 > chunk_limit:
+                chunks.append(current)
+                current = ''
+            current = f'{current} {word}'.strip()
+        if current:
+            chunks.append(current)
+    return chunks
 
 
 def strip_for_tts(text: str) -> str:
@@ -79,6 +140,35 @@ def truncate_for_tts(text: str, limit: int = MAX_TTS_CHARS) -> str:
         if idx > limit // 2:
             return chunk[:idx + 1] + " Full details are on screen."
     return chunk.rstrip() + ". Full details are on screen."
+
+
+def sanitize_text_for_tts(text: str) -> str:
+    """Keep visual A.U.R.A branding out of spoken text."""
+    if not text:
+        return ""
+    t = _AURA_DOTTED_RE.sub("Aura", text)
+    t = _AURA_SPACED_RE.sub("Aura", t)
+    t = _AURA_WORD_RE.sub("Aura", t)
+    return t
+
+
+def apply_tts_pronunciation_aliases(text: str) -> tuple[str, int]:
+    """Return a speak-only version of text with known name pronunciations."""
+    if not text:
+        return "", 0
+    spoken = text
+    applied_groups: set[str] = set()
+    for group_name, aliases in TTS_PRONUNCIATION_ALIAS_GROUPS:
+        for display, speak in aliases:
+            if display in spoken:
+                spoken = spoken.replace(display, speak)
+                applied_groups.add(group_name)
+    return spoken, len(applied_groups)
+
+
+def build_tts_speak_text(display_text: str) -> str:
+    """Build the text that may be sent to a TTS provider."""
+    return apply_tts_pronunciation_aliases(display_text)[0]
 
 
 # ── Cancellation machinery ────────────────────────────────────────────────
@@ -144,6 +234,40 @@ PIPER_SPEED     = float(os.environ.get("JARVIS_PIPER_SPEED", "0.85"))
 EDGE_VOICE      = os.environ.get("JARVIS_EDGE_VOICE",    "en-GB-RyanNeural")
 EDGE_VOICE_IT   = os.environ.get("JARVIS_EDGE_VOICE_IT", "it-IT-DiegoNeural")
 EDGE_VOICE_RU   = os.environ.get("JARVIS_EDGE_VOICE_RU", "ru-RU-DmitryNeural")
+
+
+def required_tts_provider() -> str:
+    return os.environ.get("AURA_TTS_REQUIRED_PROVIDER", "").strip().lower().replace("-", "_")
+
+
+def strict_primary_tts_enabled() -> bool:
+    return os.environ.get("AURA_TTS_STRICT_PRIMARY", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def cartesia_only_required() -> bool:
+    return required_tts_provider() == "cartesia"
+
+
+def browser_tts_fallback_allowed() -> bool:
+    return os.environ.get("AURA_TTS_ALLOW_BROWSER_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def cartesia_tts_timeout_seconds() -> float:
+    raw = os.environ.get("AURA_CARTESIA_TTS_TIMEOUT_SECONDS", "5").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 5.0
+    return max(1.0, min(value, 30.0))
+
+
+def cartesia_tts_chunk_timeout_seconds() -> float:
+    raw = os.environ.get("AURA_CARTESIA_CHUNK_TIMEOUT_SECONDS", os.environ.get("AURA_CARTESIA_TTS_CHUNK_TIMEOUT_SECONDS", "8")).strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 8.0
+    return max(1.0, min(value, 30.0))
 
 
 def _pick_edge_voice(lang: str) -> str:
@@ -333,6 +457,40 @@ async def ensure_piper_loaded() -> None:
         _piper_warmed = True
 
 
+async def synthesize_fish_audio(
+    text: str,
+    include_base64: bool = True,
+    purpose: str = "voice_turn",
+) -> dict[str, Any]:
+    """Return Fish Audio browser-playable audio through the diagnostics provider path."""
+    from . import diagnostics
+
+    return await diagnostics.synthesize_fish_audio(
+        text,
+        include_base64=include_base64,
+        purpose=purpose,
+    )
+
+
+async def synthesize_cartesia_audio(
+    text: str,
+    include_base64: bool = True,
+    purpose: str = "voice_turn",
+    mode: str = "voice_turn",
+    force_live: bool = False,
+) -> dict[str, Any]:
+    """Return Cartesia Sonic browser-playable audio through the shared provider path."""
+    from . import diagnostics
+
+    return await diagnostics.synthesize_cartesia_audio(
+        text,
+        include_base64=include_base64,
+        purpose=purpose,
+        mode=mode,
+        force_live=force_live,
+    )
+
+
 # ── Public API ────────────────────────────────────────────────────────────
 
 async def speak(text: str, lang: str = "en") -> dict[str, Any]:
@@ -343,7 +501,7 @@ async def speak(text: str, lang: str = "en") -> dict[str, Any]:
     during playback.
     """
     gen = _generation
-    clean = strip_for_tts(text)
+    clean = sanitize_text_for_tts(strip_for_tts(text))
     if not clean:
         return {"ok": True, "skipped": True, "reason": "empty after strip"}
     clean = truncate_for_tts(clean)

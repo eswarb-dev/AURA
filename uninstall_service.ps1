@@ -1,6 +1,6 @@
-﻿<#
+<#
 .SYNOPSIS
-  Removes the JARVIS voice server Windows Service and its firewall rule.
+  Removes the A.U.R.A voice server Windows Service and its firewall rule.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -9,7 +9,7 @@ $repoRoot   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pythonExe  = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $servicePy  = Join-Path $repoRoot "jarvis\service.py"
 $svcName    = "JarvisVoiceServer"
-$fwRuleName = "JARVIS Voice Server (127.0.0.1:8765)"
+$fwRuleName = "A.U.R.A voice server (127.0.0.1:8765)"
 
 function Assert-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()

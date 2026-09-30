@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { connectWebSocket, useJarvisStore } from '@/store/jarvisStore'
-import { BootSplash } from '@/components/BootSplash'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { OrbConsole } from '@/pages/OrbConsole'
+import { DiagnosticsPage } from '@/pages/Diagnostics'
+import { MobileControl } from '@/pages/MobileControl'
 import { initPersonaEarly } from '@/lib/cosmo'
 import '@/components/ProjectsPanel'
 import '@/components/SubagentsPanel'
@@ -11,8 +12,9 @@ import '@/components/LogsPanel'
 import '@/components/SettingsPanel'
 
 function App() {
-  const [booted, setBooted] = useState(false)
   const setPersona = useJarvisStore((s) => s.setPersona)
+  const isDiagnostics = window.location.pathname === '/diagnostics'
+  const isMobileControl = window.location.pathname === '/mobile' || window.location.pathname === '/mobile-control'
 
   useEffect(() => {
     const persona = initPersonaEarly()
@@ -22,8 +24,13 @@ function App() {
 
   return (
     <ErrorBoundary>
-      {!booted && <BootSplash onDone={() => setBooted(true)} />}
-      <OrbConsole />
+      {isMobileControl ? (
+        <MobileControl />
+      ) : isDiagnostics ? (
+        <DiagnosticsPage />
+      ) : (
+        <OrbConsole />
+      )}
     </ErrorBoundary>
   )
 }

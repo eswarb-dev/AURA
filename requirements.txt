@@ -7,6 +7,7 @@ openwakeword>=0.6.0
 sounddevice>=0.4.6
 numpy>=1.26,<2
 edge-tts>=6.1.9
-uvloop>=0.17
-httptools>=0.6
+uvloop>=0.17; sys_platform != "win32"
+httptools>=0.6; sys_platform != "win32"
 psutil>=5.9
+supabase>=2.10

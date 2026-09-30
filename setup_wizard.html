@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>JARVIS Setup</title>
+<title>A.U.R.A Setup</title>
 <style>
   :root {
     --bg: #0a0e14; --panel: #121826; --accent: #3ddcff; --accent2: #ff7a3d;
@@ -77,7 +77,7 @@
 
   <!-- Step 0: install -->
   <section id="step-0" class="active">
-    <p>Installing JARVIS and its dependencies. This downloads Python packages
+    <p>Installing A.U.R.A and its dependencies. This downloads Python packages
        (and, on Linux, tries to install <code>piper</code> / <code>ffmpeg</code>
        via your package manager). It can take a few minutes the first time.</p>
     <p><span class="spinner" id="install-spinner"></span><span id="install-status">Starting...</span></p>
@@ -90,7 +90,7 @@
 
   <!-- Step 1: AI backend -->
   <section id="step-1">
-    <p>Choose the AI that powers JARVIS:</p>
+    <p>Choose the AI that powers A.U.R.A:</p>
 
     <label class="radio-row"><input type="radio" name="backend" value="claude" checked>
       <span class="title">Claude Pro / Agent SDK</span>
@@ -153,7 +153,7 @@
     </select>
 
     <label class="check-row"><input type="checkbox" id="wakeword" checked>
-      <span class="title">Enable "Hey Jarvis" wake word</span>
+      <span class="title">Enable "Hey AURA" wake phrase</span>
     </label>
 
     <p style="margin-top:18px">Offline TTS voices (piper) — optional, edge-tts works without these but needs internet:</p>
@@ -169,7 +169,7 @@
 
   <!-- Step 3: Personalization -->
   <section id="step-3">
-    <p>Personalize JARVIS (saved locally, never committed to git):</p>
+    <p>Personalize A.U.R.A (saved locally, never committed to git):</p>
     <label>Your name</label>
     <input type="text" id="user_name" placeholder="John">
     <label>Your hardware <span style="color:var(--muted)">(auto-detected, edit if needed)</span></label>
@@ -182,13 +182,13 @@
 
   <!-- Step 4: Integrations -->
   <section id="step-4">
-    <p>Optional integrations — connect JARVIS to apps you already use via MCP.
+    <p>Optional integrations — connect A.U.R.A to apps you already use via MCP.
        Pick any number; you can add API keys/tokens later by editing
        <code>~/.jarvis/mcp.json</code>.</p>
 
     <label class="check-row"><input type="checkbox" id="mcp_playwright">
       <span class="title">Browser control (Playwright)</span>
-      <span class="desc">Lets JARVIS drive a real browser — fill forms, click, scrape pages. No key needed.</span>
+      <span class="desc">Lets A.U.R.A drive a real browser — fill forms, click, scrape pages. No key needed.</span>
     </label>
 
     <label class="check-row"><input type="checkbox" id="mcp_whatsapp">
@@ -209,7 +209,7 @@
         </div>
         <p id="wa-connected" style="display:none; margin:0">
           <span class="pill ok">✓ Linked</span>
-          <span style="margin-left:8px; font-size:12px; color:var(--muted)">WhatsApp is connected — JARVIS can now read and send messages on your behalf.</span>
+          <span style="margin-left:8px; font-size:12px; color:var(--muted)">WhatsApp is connected — A.U.R.A can now read and send messages on your behalf.</span>
         </p>
         <p id="wa-error" style="display:none; margin:0; font-size:12px; color:var(--err)"></p>
       </div>
@@ -220,7 +220,7 @@
       <span class="desc">Read, search, and send email. First run opens a browser to authorize via OAuth.</span>
     </label>
     <p style="margin:0 0 0 26px; font-size:12px; color:var(--muted)">
-      Nothing to configure here — the first time JARVIS uses Gmail, a browser tab opens
+      Nothing to configure here — the first time A.U.R.A uses Gmail, a browser tab opens
       asking you to sign in with Google and click "Allow".
     </p>
 
@@ -281,7 +281,7 @@
       <span class="desc">Read/run Facebook &amp; Instagram ads, performance reports. Authorize via Meta on first use.</span>
     </label>
     <p style="margin:0 0 0 26px; font-size:12px; color:var(--muted)">
-      Nothing to configure here — the first time JARVIS uses it, you'll get a link to
+      Nothing to configure here — the first time A.U.R.A uses it, you'll get a link to
       log in with Facebook and grant access to your ad accounts.
     </p>
 
@@ -294,7 +294,7 @@
 
     <label class="check-row"><input type="checkbox" id="mcp_homeassistant">
       <span class="title">Home Assistant (smart home)</span>
-      <span class="desc">Control lights, climate, locks, scenes — the classic "JARVIS, lights off."</span>
+      <span class="desc">Control lights, climate, locks, scenes — the classic "A.U.R.A, lights off."</span>
     </label>
     <div id="homeassistant-fields" style="margin-left:26px; display:none">
       <label>Home Assistant URL</label>
@@ -326,20 +326,20 @@
 
     <label class="check-row"><input type="checkbox" id="mcp_github">
       <span class="title">GitHub</span>
-      <span class="desc">Manage repos, issues, PRs, CI — pairs with JARVIS's shell/file tools.</span>
+      <span class="desc">Manage repos, issues, PRs, CI — pairs with A.U.R.A's shell/file tools.</span>
     </label>
     <div id="github-fields" style="margin-left:26px; display:none">
       <label>GitHub personal access token</label>
       <div class="row2" style="align-items:center">
         <input type="password" id="github_token" placeholder="ghp_...">
         <button type="button" class="btn secondary open-link" style="flex:0 0 auto"
-                data-url="https://github.com/settings/tokens/new?description=JARVIS&scopes=repo,workflow">Create token ↗</button>
+                data-url="https://github.com/settings/tokens/new?description=AURA&scopes=repo,workflow">Create token ↗</button>
       </div>
     </div>
 
     <label class="check-row"><input type="checkbox" id="mcp_notion">
       <span class="title">Notion</span>
-      <span class="desc">Read/write your notes, docs, and databases — JARVIS's long-form knowledge base.</span>
+      <span class="desc">Read/write your notes, docs, and databases — A.U.R.A's long-form knowledge base.</span>
     </label>
     <div id="notion-fields" style="margin-left:26px; display:none">
       <label>Notion integration token</label>
@@ -349,7 +349,7 @@
                 data-url="https://www.notion.so/my-integrations">Get token ↗</button>
       </div>
       <p style="margin:6px 0 0; font-size:12px; color:var(--muted)">
-        Create an internal integration, copy its secret, then share the pages you want JARVIS to see with it.
+        Create an internal integration, copy its secret, then share the pages you want A.U.R.A to see with it.
       </p>
     </div>
 
@@ -385,7 +385,7 @@
     </div>
 
     <p style="margin-top:18px">Business knowledge base (optional)</p>
-    <label>Folder of markdown notes JARVIS should read for context (FAQs, tone of voice, policies):</label>
+    <label>Folder of markdown notes A.U.R.A should read for context (FAQs, tone of voice, policies):</label>
     <div class="row2" style="align-items:center">
       <input type="text" id="kb_path" placeholder="C:\Users\you\Documents\jarvis-kb" readonly>
       <button type="button" class="btn secondary" id="btn-pick-kb" style="flex:0 0 auto">Choose folder…</button>
@@ -400,10 +400,10 @@
   <!-- Step 5: Finish -->
   <section id="step-5">
     <p>Saving configuration and downloading any selected voices...</p>
-    <p id="finish-msg" style="display:none"><span class="pill ok">Ready</span> JARVIS is starting — this page will redirect automatically.</p>
+    <p id="finish-msg" style="display:none"><span class="pill ok">Ready</span> A.U.R.A is starting — this page will redirect automatically.</p>
     <div class="actions">
       <span></span>
-      <button class="btn" id="btn-launch">Save &amp; Launch JARVIS</button>
+      <button class="btn" id="btn-launch">Save &amp; Launch A.U.R.A</button>
     </div>
   </section>
 </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   FolderGit2, ListChecks, Brain, Activity, Settings, X, Plus,
 } from 'lucide-react'
@@ -19,18 +19,24 @@ const ICONS: Record<string, typeof FolderGit2> = {
   settings: Settings,
 }
 
-const PANEL_CONTENT: Record<string, () => React.ReactNode> = {}
+// Panels register their React component (not a render function) on import.
+// Rendering via a real <Component /> JSX element keeps React's hook
+// bookkeeping consistent between renders — calling render() as a plain
+// function (the previous implementation) broke hook ordering under React 19.
+const PANEL_CONTENT: Record<string, React.ComponentType | null> = {}
 
-export function registerPanelContent(id: string, render: () => React.ReactNode) {
-  PANEL_CONTENT[id] = render
+export function registerPanelContent(id: string, Component: React.ComponentType) {
+  PANEL_CONTENT[id] = Component
 }
 
-/** Wrap a registered panel in its own ErrorBoundary so a single panel crash
- *  doesn't tear down the whole orb UI. */
-function PanelErrorBoundary(props: { id: string; children: React.ReactNode }) {
+/** Render the registered panel for an id. Wrapped in an ErrorBoundary so a
+ *  single panel crash can't tear down the whole orb UI. */
+function PanelContent({ id }: { id: string }) {
+  const Component = PANEL_CONTENT[id]
+  if (!Component) return <UnknownPanel id={id} />
   return (
-    <ErrorBoundary compact label={`panel · ${props.id}`}>
-      {props.children}
+    <ErrorBoundary compact label={`panel · ${id}`}>
+      <Component />
     </ErrorBoundary>
   )
 }
@@ -39,26 +45,58 @@ export function RadialMenu({ panels }: { panels: RadialPanel[] }) {
   const [open, setOpen] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
 
+  const closePanel = () => {
+    if (new URLSearchParams(window.location.search).get('debug') === '1') {
+      console.log('[AURA UI] close panel:', open)
+      console.log('[AURA UI] modal close clicked')
+    }
+    setOpen(null)
+  }
+
+  // Listen to external panel open requests (e.g. from ProjectContextWidget)
+  useEffect(() => {
+    const onOpenPanel = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { panel?: string }
+      if (detail?.panel) {
+        if (new URLSearchParams(window.location.search).get('debug') === '1') {
+          console.log('[AURA UI] open panel:', detail.panel)
+        }
+        setOpen(detail.panel)
+      }
+    }
+    const onClosePanel = () => {
+      if (new URLSearchParams(window.location.search).get('debug') === '1') {
+        console.log('[AURA UI] close panel via event')
+      }
+      setOpen(null)
+    }
+    window.addEventListener('jarvis-open-panel', onOpenPanel)
+    window.addEventListener('jarvis-close-panel', onClosePanel)
+    return () => {
+      window.removeEventListener('jarvis-open-panel', onOpenPanel)
+      window.removeEventListener('jarvis-close-panel', onClosePanel)
+    }
+  }, [])
+
   // Close panel on Escape
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null) }
+    if (new URLSearchParams(window.location.search).get('debug') === '1') {
+      console.log('[AURA UI] open panel:', open)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (new URLSearchParams(window.location.search).get('debug') === '1') {
+          console.log('[AURA UI] escape close')
+        }
+        setOpen(null)
+      }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open])
 
   const openId = hovered ?? open
-
-  // Stable panel element — same React element reference for the same openId
-  // across renders. Without this, RadialMenu's parent re-renders would
-  // produce a fresh <TasksPanel /> element every time, which can trip
-  // React's hook bookkeeping when the panel happens to also re-render
-  // due to a store update at the same time.
-  const panelContent = useMemo(() => {
-    if (!openId || openId === '__hub__') return null
-    const render = PANEL_CONTENT[openId]
-    return render ? render() : <UnknownPanel id={openId} />
-  }, [openId])
 
   return (
     <>
@@ -66,7 +104,13 @@ export function RadialMenu({ panels }: { panels: RadialPanel[] }) {
       <div className="relative flex flex-col items-center gap-3">
         <button
           type="button"
-          onClick={() => setOpen(open ? null : '__hub__')}
+          onClick={() => {
+            const next = open ? null : '__hub__'
+            if (next && new URLSearchParams(window.location.search).get('debug') === '1') {
+              console.log('[AURA UI] open panel: __hub__')
+            }
+            setOpen(next)
+          }}
           className={cn(
             'flex h-12 w-12 items-center justify-center rounded-full border-2 backdrop-blur-md transition',
             open
@@ -77,22 +121,25 @@ export function RadialMenu({ panels }: { panels: RadialPanel[] }) {
           <Plus size={20} className={cn('transition', open && 'rotate-45')} />
         </button>
 
-        {/* Panel labels (always-visible shortcuts around the hub) */}
+        {/* Panel labels (always-visible shortcuts beside the hub button) */}
         {!open && panels.map((p, i) => {
           const Icon = ICONS[p.icon] ?? Settings
-          const angle = (Math.PI / 4) * (i - (panels.length - 1) / 2)
-          const r = 86
-          const x = Math.sin(angle) * r
-          const y = -Math.cos(angle) * r * 0.6  // squish vertical so it fits the bottom strip
+          const x = -(i + 1) * 42
+          const y = 0
           return (
             <button
               key={p.id}
               type="button"
               onMouseEnter={() => setHovered(p.id)}
               onMouseLeave={() => setHovered(null)}
-              onClick={() => setOpen(p.id)}
+              onClick={() => {
+                if (new URLSearchParams(window.location.search).get('debug') === '1') {
+                  console.log('[AURA UI] open panel:', p.id)
+                }
+                setOpen(p.id)
+              }}
               style={{ transform: `translate(${x}px, ${y}px)` }}
-              className="absolute flex h-9 w-9 items-center justify-center rounded-full border border-[var(--line-bright)] bg-black/55 text-[var(--text-dim)] backdrop-blur-md transition hover:scale-110 hover:border-[var(--blue)] hover:text-[var(--blue)]"
+              className="absolute top-1.5 flex h-9 w-9 items-center justify-center rounded-full border border-[var(--line-bright)] bg-black/75 text-[var(--text-dim)] backdrop-blur-md transition hover:scale-110 hover:border-[var(--blue)] hover:text-[var(--blue)]"
               title={p.label}
             >
               <Icon size={14} />
@@ -101,37 +148,54 @@ export function RadialMenu({ panels }: { panels: RadialPanel[] }) {
         })}
       </div>
 
-      {/* Floating panel — renders the requested panel content */}
+      {/* Floating panel & backdrop — renders requested panel content */}
       {openId && (
-        <div className="pointer-events-auto absolute right-0 top-0 z-30 h-full w-[420px] max-w-[80vw] animate-[slide-in-right_0.25s_ease-out] border-l border-[var(--line-bright)] bg-black/85 backdrop-blur-xl">
-          <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3.5">
-              <div className="flex items-center gap-2 font-display text-[12px] uppercase tracking-[0.24em] text-[var(--blue)]">
-                {(() => {
-                  const p = panels.find((p) => p.id === openId)
-                  if (!p) return <span>menu</span>
-                  const Icon = ICONS[p.icon] ?? Settings
-                  return <><Icon size={13} /> {p.label}</>
-                })()}
+        <>
+          <div
+            className="aura-modal-backdrop"
+            onClick={() => {
+              if (new URLSearchParams(window.location.search).get('debug') === '1') {
+                console.log('[AURA UI] backdrop clicked')
+              }
+              closePanel()
+            }}
+          />
+          <div
+            className="aura-modal-panel aura-task-panel pointer-events-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex h-full flex-col">
+              <div className="aura-task-panel-header">
+                <div className="flex items-center gap-2 font-display text-[12px] uppercase tracking-[0.24em] text-[var(--blue)]">
+                  {(() => {
+                    const p = panels.find((p) => p.id === openId)
+                    if (!p) return <span>menu</span>
+                    const Icon = ICONS[p.icon] ?? Settings
+                    return <><Icon size={13} /> {p.label}</>
+                  })()}
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close modal panel"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    closePanel()
+                  }}
+                  className="aura-modal-close"
+                  title="Close panel (Esc)"
+                >
+                  <X size={16} />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setOpen(null)}
-                className="rounded-sm border border-[var(--line-bright)] p-1 text-[var(--text-dim)] hover:border-[var(--blue)] hover:text-[var(--blue)]"
-                title="Close panel (Esc)"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {openId === '__hub__' ? <HubPanel onPick={(id) => setOpen(id)} panels={panels} /> : (
-                <PanelErrorBoundary id={openId}>
-                  {panelContent}
-                </PanelErrorBoundary>
-              )}
+              <div className="aura-task-panel-body">
+                {openId === '__hub__' ? <HubPanel onPick={(id) => setOpen(id)} panels={panels} /> : (
+                  <PanelContent id={openId} />
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
     </>
   )
@@ -163,7 +227,7 @@ function UnknownPanel({ id }: { id: string }) {
     <div className="p-5 text-[var(--text-dim)]">
       <p>Panel "{id}" has no content registered yet.</p>
       <p className="mt-2 text-[10px] text-[var(--text-faint)]">
-        Use <code>registerPanelContent(id, render)</code> in the panel module to register.
+        Use <code>registerPanelContent(id, Component)</code> in the panel module to register.
       </p>
     </div>
   )

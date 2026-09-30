@@ -3,7 +3,7 @@ import { useJarvisStore } from '@/store/jarvisStore'
 
 const BOOT_LINES = [
   'INITIALIZING…',
-  'LOADING cosmo v1.0',
+  'LOADING A.U.R.A v1.0',
   'PROBING audio device... ok',
   'LINKING to hermes...',
   'ONLINE. what do you actually need?',

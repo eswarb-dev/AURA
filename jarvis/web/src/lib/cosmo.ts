@@ -1,6 +1,6 @@
-/** Cosmo boot helpers — replaces the deleted persona.ts.
+/** A.U.R.A boot helpers — replaces the deleted persona.ts.
 
-There is no persona switching anymore. The voice is unified as Cosmo.
+There is no persona switching anymore. The voice is unified as A.U.R.A.
 This file just initializes the persona CSS class for any legacy
 references in the HTML and provides a default for the store.
 */
@@ -15,7 +15,7 @@ export function applyPersonaClass(_p: Persona = 'cosmo'): void {
   const html = document.documentElement
   html.classList.remove('persona-jarvis', 'persona-eli6', 'persona-cosmo')
   html.classList.add('persona-cosmo')
-  document.title = 'cosmo'
+  document.title = 'A.U.R.A'
 }
 
 export async function loadPersona(): Promise<Persona> {

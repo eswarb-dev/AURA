@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react'
+import { isRemoveChildNotFound } from '@/lib/domCleanup'
 
 interface Props {
   children: ReactNode
@@ -10,21 +11,29 @@ interface Props {
 }
 interface State {
   error: Error | null
+  cleanupRecoveries: number
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null }
+  state: State = { error: null, cleanupRecoveries: 0 }
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error }
   }
 
   componentDidCatch(error: Error, info: unknown) {
+    if (isRemoveChildNotFound(error) && this.state.cleanupRecoveries === 0) {
+      // The failed subtree has unmounted; rebuild once from React-owned nodes.
+      console.warn('[AURA DOM] Recovering from detached-node cleanup')
+      this.setState({ error: null, cleanupRecoveries: 1 })
+      return
+    }
     console.error('App crashed:', error, info)
   }
 
   render() {
     if (this.state.error) {
+      if (isRemoveChildNotFound(this.state.error) && this.state.cleanupRecoveries === 0) return null
       if (this.props.compact) {
         return (
           <div className="flex h-full w-full items-center justify-center rounded border border-[var(--line-bright)] bg-black/40 p-3 font-mono text-[10px] leading-snug text-[var(--red)]">
@@ -47,7 +56,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="flex h-full w-full flex-col items-center justify-center bg-black p-10 font-mono text-[var(--text)]">
           <div className="text-[14px] uppercase tracking-[0.24em] text-[var(--red)]">
-            cosmo crashed
+            A.U.R.A crashed
           </div>
           <pre className="mt-3 max-w-2xl whitespace-pre-wrap break-words rounded-sm border border-[var(--line)] bg-black/50 p-4 text-[11px] text-[var(--text-dim)]">
             {this.state.error.message}

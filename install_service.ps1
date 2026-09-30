@@ -1,11 +1,11 @@
-﻿<#
+<#
 .SYNOPSIS
-  Registers the JARVIS voice server as a Windows Service running under
-  LOCAL SYSTEM. After this runs once (with a single UAC prompt), Cosmo
+  Registers the A.U.R.A voice server as a Windows Service running under
+  LOCAL SYSTEM. After this runs once (with a single UAC prompt), A.U.R.A
   has full admin rights on the box without any further UAC prompts.
 
 .DESCRIPTION
-  This is the *only* UAC prompt you'll ever see for JARVIS. The service
+  This is the *only* UAC prompt you'll ever see for A.U.R.A. The service
   registers itself to auto-start at boot, runs as NT AUTHORITY\SYSTEM,
   and supervises the uvicorn child process — so from this point on,
   every reboot, every start, every restart is silent.
@@ -75,7 +75,7 @@ Write-Host "[install] registering service '$svcName' (start=auto)..." -Foregroun
 if ($LASTEXITCODE -ne 0) { throw "service install failed (exit $LASTEXITCODE)" }
 
 # â”€â”€ description â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-sc.exe description $svcName "Cosmo voice + LLM server (LOCAL SYSTEM). Auto-starts at boot." | Out-Null
+sc.exe description $svcName "A.U.R.A voice + LLM server (LOCAL SYSTEM). Auto-starts at boot." | Out-Null
 
 # â”€â”€ recovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # restart on first/second/subsequent failure with 5s delay
@@ -83,7 +83,7 @@ sc.exe description $svcName "Cosmo voice + LLM server (LOCAL SYSTEM). Auto-start
 
 # â”€â”€ firewall (defensive: uvicorn already binds 127.0.0.1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Allow inbound on 8765 only from localhost. Existing rule is skipped.
-$fwRuleName = "JARVIS Voice Server (127.0.0.1:8765)"
+$fwRuleName = "A.U.R.A voice server (127.0.0.1:8765)"
 $fwRule = Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue
 if (-not $fwRule) {
     New-NetFirewallRule -DisplayName $fwRuleName `

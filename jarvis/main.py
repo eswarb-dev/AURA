@@ -57,7 +57,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -65,6 +65,9 @@ from starlette.middleware.gzip import GZipMiddleware
 from . import hermes_client as llm
 from . import tts
 from . import context_manager as ctx_mgr
+from . import diagnostics
+from . import identity
+from . import remote_control
 from .stt import get_stt
 from .task_manager import TaskManager
 from .tools import hypr as hypr_tool
@@ -78,6 +81,9 @@ log = logging.getLogger("jarvis")
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
 DIST_DIR = STATIC_DIR / "dist"
+MODELS_DIR = DIST_DIR / "models"
+if not MODELS_DIR.exists():
+    MODELS_DIR = ROOT / "web" / "public" / "models"
 # Personal prompt (gitignored) takes priority; fall back to the committed template.
 _PERSONAL_PROMPT = ROOT / "personal info cosmo" / "system_prompt.txt"
 SYSTEM_PROMPT_PATH = _PERSONAL_PROMPT if _PERSONAL_PROMPT.exists() else ROOT / "system_prompt.txt"
@@ -102,6 +108,8 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # New React/Vite frontend build output (jarvis/web -> jarvis/static/dist).
 if (DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="dist-assets")
+if MODELS_DIR.exists():
+    app.mount("/models", StaticFiles(directory=str(MODELS_DIR)), name="models")
 
 # Enable gzip compression for responses (especially WebSocket messages)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -345,6 +353,16 @@ async def handle_user_turn(text: str, *, voice: bool, send: Any) -> None:
 
     if not text.strip():
         return
+    raw_voice_text = text.strip()
+    voice_normalization: dict[str, Any] | None = None
+    if voice:
+        from .voice_intents import normalize_aura_transcript
+        voice_normalization = normalize_aura_transcript(raw_voice_text)
+        text = str(voice_normalization.get("normalized") or raw_voice_text).strip()
+        if not voice_normalization.get("wake_detected") and text in {"uh", "um", "hmm", "..."}:
+            return
+        if not text:
+            return
 
     # Stop any ongoing speech from the previous turn immediately
     await tts.cancel_speaking()
@@ -356,7 +374,14 @@ async def handle_user_turn(text: str, *, voice: bool, send: Any) -> None:
     # Fast-path: "are you online" — skip LLM, speak greeting, open WebUI
     if _ONLINE_CHECK_RE.search(text):
         reply = "Online and ready, sir. All systems nominal."
-        await _emit({"type": "transcript", "text": text, "voice": voice}, send)
+        await _emit({
+            "type": "transcript",
+            "text": text,
+            "raw_text": raw_voice_text,
+            "normalized_text": text,
+            "normalization": voice_normalization,
+            "voice": voice,
+        }, send)
         await _emit({"type": "turn_start", "voice": voice}, send)
         await _emit({"type": "turn_end", "final_text": reply, "elapsed": 0.0}, send)
         await _emit({"type": "speaking", "state": "start"}, send)
@@ -376,7 +401,14 @@ async def handle_user_turn(text: str, *, voice: bool, send: Any) -> None:
         intent_name, groups = intent
         handled = await handle_voice_intent(intent_name, groups, send=send, broadcast=hub.broadcast)
         if handled:
-            await _emit({"type": "transcript", "text": text, "voice": voice}, send)
+            await _emit({
+                "type": "transcript",
+                "text": text,
+                "raw_text": raw_voice_text,
+                "normalized_text": text,
+                "normalization": voice_normalization,
+                "voice": voice,
+            }, send)
             await _emit({"type": "turn_start", "voice": voice}, send)
             await _emit({"type": "turn_end", "final_text": "(voice command handled)", "elapsed": 0.0}, send)
             return
@@ -390,7 +422,14 @@ async def handle_user_turn(text: str, *, voice: bool, send: Any) -> None:
         # fall through to the normal LLM turn with the rewritten text
 
     user_message = f"[VOICE] {text}" if voice else text
-    await _emit({"type": "transcript", "text": text, "voice": voice}, send)
+    await _emit({
+        "type": "transcript",
+        "text": text,
+        "raw_text": raw_voice_text if voice else text,
+        "normalized_text": text,
+        "normalization": voice_normalization,
+        "voice": voice,
+    }, send)
 
     async with _lock:
         conversation.append({"role": "user", "content": user_message})
@@ -554,6 +593,21 @@ async def index() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+@app.get("/diagnostics")
+async def diagnostics_index() -> FileResponse:
+    return await index()
+
+
+@app.get("/mobile")
+async def mobile_index() -> FileResponse:
+    return await index()
+
+
+@app.get("/mobile-control")
+async def mobile_control_index() -> FileResponse:
+    return await index()
+
+
 @app.get("/favicon.svg")
 async def favicon() -> FileResponse:
     return FileResponse(str(DIST_DIR / "favicon.svg"))
@@ -573,6 +627,489 @@ async def healthz() -> dict[str, Any]:
         "mode": _current_mode,
         "clients": len(hub.clients),
         "conversation_length": len(conversation),
+    }
+
+
+from . import capabilities
+
+
+@app.get("/api/capabilities")
+@app.get("/api/diagnostics/capabilities")
+async def api_capabilities() -> dict[str, Any]:
+    return capabilities.get_capability_state()
+
+
+def _remote_http_error(exc: remote_control.RemoteControlError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.as_detail())
+
+
+def _is_loopback_request(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+@app.get("/api/remote-control/status")
+async def api_remote_control_status(token: str | None = None) -> dict[str, Any]:
+    return remote_control.status(token)
+
+
+@app.post("/api/remote-control/send")
+async def api_remote_control_send(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        return remote_control.send(body)
+    except remote_control.RemoteControlError as exc:
+        raise _remote_http_error(exc) from exc
+
+
+@app.get("/api/remote-control/poll")
+async def api_remote_control_poll(request: Request, client: str | None = None, token: str | None = None) -> dict[str, Any]:
+    try:
+        return remote_control.poll(client, token, loopback_request=_is_loopback_request(request))
+    except remote_control.RemoteControlError as exc:
+        raise _remote_http_error(exc) from exc
+
+
+@app.post("/api/remote-control/ack")
+async def api_remote_control_ack(request: Request, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        return remote_control.ack(body, loopback_request=_is_loopback_request(request))
+    except remote_control.RemoteControlError as exc:
+        raise _remote_http_error(exc) from exc
+
+
+@app.get("/api/diagnostics/providers")
+async def api_diagnostics_providers() -> dict[str, Any]:
+    return diagnostics.provider_status()
+
+
+@app.get("/api/diagnostics/tts-config")
+async def api_diagnostics_tts_config() -> dict[str, Any]:
+    voice_id = diagnostics._elevenlabs_voice_id()
+    tts_status = diagnostics.tts_provider_status()
+    return {
+        "ok": True,
+        "provider": tts_status["priority"][0] if tts_status["priority"] else "browser_speech",
+        "preferred_tts_provider": tts_status["priority"][0] if tts_status["priority"] else "browser_speech",
+        "fallback_order": tts_status["priority"],
+        "fish_audio": tts_status["fish_audio"],
+        "elevenlabs": tts_status["elevenlabs"],
+        "voice_id_present": bool(voice_id),
+        "voice_id_masked": diagnostics._mask_voice_id(voice_id),
+        "voice_id_source": diagnostics._elevenlabs_voice_id_source(),
+        "same_for_agent_voice_turn": True,
+    }
+
+
+@app.get("/api/diagnostics/tts-providers")
+async def api_diagnostics_tts_providers() -> dict[str, Any]:
+    return diagnostics.tts_provider_status()
+
+
+@app.get("/api/diagnostics/tts-strict-status")
+async def api_diagnostics_tts_strict_status() -> dict[str, Any]:
+    return diagnostics.tts_strict_status()
+
+
+@app.get("/api/diagnostics/vision-model-assets")
+async def api_diagnostics_vision_model_assets() -> dict[str, Any]:
+    face_api_dir = MODELS_DIR / "face-api"
+    files: list[str] = []
+    if face_api_dir.exists():
+        files = sorted(
+            str(path.relative_to(MODELS_DIR)).replace("\\", "/")
+            for path in face_api_dir.rglob("*")
+            if path.is_file()
+        )
+    return {
+        "ok": MODELS_DIR.exists(),
+        "models_dir": str(MODELS_DIR),
+        "exists": MODELS_DIR.exists(),
+        "face_api_dir_exists": face_api_dir.exists(),
+        "files": files,
+        "test_url": "/models/face-api/tiny_face_detector_model-weights_manifest.json",
+    }
+
+
+@app.post("/api/diagnostics/openrouter")
+async def api_diagnostics_openrouter() -> dict[str, Any]:
+    return await diagnostics.test_openrouter()
+
+
+@app.post("/api/diagnostics/groq")
+async def api_diagnostics_groq() -> dict[str, Any]:
+    return await diagnostics.test_groq()
+
+
+@app.post("/api/diagnostics/provider-chain")
+async def api_diagnostics_provider_chain() -> dict[str, Any]:
+    return await diagnostics.test_provider_chain()
+
+
+@app.get("/api/diagnostics/elevenlabs-network")
+@app.post("/api/diagnostics/elevenlabs-network")
+async def api_diagnostics_elevenlabs_network() -> dict[str, Any]:
+    return diagnostics.test_elevenlabs_network()
+
+
+@app.post("/api/diagnostics/elevenlabs")
+async def api_diagnostics_elevenlabs(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    include_audio = bool((body or {}).get("include_audio"))
+    return await diagnostics.test_elevenlabs(include_audio=include_audio)
+
+
+@app.post("/api/diagnostics/fish-audio")
+async def api_diagnostics_fish_audio(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    include_audio = bool((body or {}).get("include_audio") or (body or {}).get("include_base64"))
+    return await diagnostics.test_fish_audio(include_audio=include_audio)
+
+
+@app.post("/api/diagnostics/cartesia")
+async def api_diagnostics_cartesia(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    include_audio = bool((body or {}).get("include_audio") or (body or {}).get("include_base64"))
+    text = str((body or {}).get("text") or "Awake, Sir.")
+    return await diagnostics.test_cartesia(include_audio=include_audio, text=text)
+
+
+@app.post("/api/diagnostics/cartesia-network")
+async def api_diagnostics_cartesia_network() -> dict[str, Any]:
+    return await diagnostics.test_cartesia_network()
+
+
+@app.post("/api/diagnostics/cartesia/reset-state")
+async def api_diagnostics_cartesia_reset_state(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    return diagnostics.reset_cartesia_state(clear_cache=bool((body or {}).get("clear_cache")))
+
+
+@app.post("/api/diagnostics/fish-audio-network")
+async def api_diagnostics_fish_audio_network() -> dict[str, Any]:
+    return await diagnostics.test_fish_audio_network()
+
+
+@app.post("/api/diagnostics/tts-chain")
+async def api_diagnostics_tts_chain(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    include_audio = bool((body or {}).get("include_audio") or (body or {}).get("include_base64"))
+    return await diagnostics.test_tts_chain(include_audio=include_audio)
+
+
+@app.post("/api/diagnostics/tts-preflight")
+async def api_diagnostics_tts_preflight() -> dict[str, Any]:
+    return await diagnostics.tts_preflight()
+
+
+@app.post("/api/diagnostics/voice-loop")
+async def api_diagnostics_voice_loop(body: dict[str, Any]) -> dict[str, Any]:
+    transcript = str(body.get("transcript", "")).strip()
+    if not transcript:
+        return {"ok": False, "error": "missing_transcript", "message": "transcript is required"}
+    source = str(body.get("source", "browser_stt")).strip() or "browser_stt"
+    started_at = body.get("startedAt")
+    return await diagnostics.voice_loop(transcript, source, str(started_at) if started_at else None)
+
+
+@app.post("/api/diagnostics/voice-bench-loop")
+async def api_diagnostics_voice_bench_loop(body: dict[str, Any]) -> dict[str, Any]:
+    return await diagnostics.voice_bench_loop(body)
+
+
+@app.get("/api/tools/status")
+async def api_tools_status() -> dict[str, Any]:
+    from .tools import tool_router
+    return tool_router.status()
+
+
+@app.post("/api/tools/execute")
+async def api_tools_execute(body: dict[str, Any]) -> dict[str, Any]:
+    from .tools import tool_router
+    return tool_router.execute_aura_tool(
+        str((body or {}).get("tool_name") or ""),
+        str((body or {}).get("action") or ""),
+        (body or {}).get("params") if isinstance((body or {}).get("params"), dict) else {},
+        (body or {}).get("context") if isinstance((body or {}).get("context"), dict) else {},
+    )
+
+
+@app.get("/api/tools/audit-log")
+async def api_tools_audit_log(limit: int = 50) -> dict[str, Any]:
+    from .tools import tool_router
+    return tool_router.read_audit_log(limit=limit)
+
+
+@app.post("/api/agent/voice-turn")
+async def api_agent_voice_turn(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        payload = dict(body or {})
+        payload["conversation_mode"] = str(payload.get("conversation_mode") or "main_orb")
+        payload["recent_turns"] = payload.get("recent_turns") if isinstance(payload.get("recent_turns"), list) else []
+        payload["identity_context"] = payload.get("identity_context") if isinstance(payload.get("identity_context"), dict) else {}
+        payload["vision_context"] = payload.get("vision_context") if isinstance(payload.get("vision_context"), dict) else {}
+        payload["vision_context"]["tracks"] = payload["vision_context"].get("tracks") if isinstance(payload["vision_context"].get("tracks"), list) else []
+        payload["actions"] = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+        payload["effective_address"] = str(payload.get("effective_address") or "Sir").strip() or "Sir"
+        payload["frontend_kind"] = str(payload.get("frontend_kind") or "normal_chat").strip() or "normal_chat"
+        payload["auto_tts"] = bool(payload.get("auto_tts", True))
+        payload["aura_awake"] = bool(payload.get("aura_awake", False))
+        payload["wake_required"] = bool(payload.get("wake_required", True))
+        return await diagnostics.voice_bench_loop(payload)
+    except Exception as exc:
+        log.exception("[AURA VOICE TURN] recovered from internal error")
+        error_preview = f"{type(exc).__name__}: {str(exc)}"[:180]
+        return {
+            "ok": True,
+            "response_text": "I hit a local runtime error, Sir.",
+            "spoken_text": "I hit a local runtime error, Sir.",
+            "actions": [],
+            "providers": {
+                "brain": "local_error_recovery",
+                "brain_model": "voice_turn_recovery",
+                "fallback_used": True,
+                "fallback_reason": "voice_turn_internal_error",
+                "tts": "browser_speech",
+            },
+            "audio": {
+                "provider": "browser_speech",
+                "mime_type": None,
+                "audio_base64": None,
+                "audio_bytes": 0,
+                "fallback_reason": "voice_turn_internal_error",
+            },
+            "debug": {
+                "intent_detected": "voice_turn_internal_error",
+                "provider_route": "local_error_recovery",
+                "failure_class": "local_tool_failed",
+                "failure_origin": "transport",
+                "frontend_kind": (body or {}).get("frontend_kind"),
+                "tool_detected": False,
+                "tool_name": None,
+                "actions_returned": 0,
+                "error_type": "voice_turn_internal_error",
+                "error_preview": error_preview,
+            },
+            "tts_debug": {
+                "requested_auto_tts": bool((body or {}).get("auto_tts", True)),
+                "final_provider": "browser_speech",
+                "browser_speech_fallback_used": True,
+                "fallback_reason": "voice_turn_internal_error",
+                "audio_base64_present": False,
+                "audio_bytes": 0,
+            },
+            "fallback_reason": "voice_turn_internal_error",
+            "error": "voice_turn_internal_error",
+            "tts_error_type": "voice_turn_internal_error",
+        }
+
+
+@app.get("/api/identity/profiles")
+async def api_identity_profiles() -> dict[str, Any]:
+    try:
+        return identity.profiles()
+    except Exception:
+        log.exception("[AURA IDENTITY] profiles route failed")
+        return identity.safe_identity_error("identity_profile_load_failed")
+
+
+@app.post("/api/identity/enroll-face")
+async def api_identity_enroll_face(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.enroll_face(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] enroll-face route failed")
+        return identity.safe_identity_error("identity_face_enroll_failed")
+
+
+@app.post("/api/identity/verify-face")
+async def api_identity_verify_face(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.verify_face(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] verify-face route failed")
+        return identity.safe_identity_error("identity_face_verify_failed")
+
+
+@app.post("/api/identity/clear-face")
+async def api_identity_clear_face(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        return identity.clear_face(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] clear-face route failed")
+        return identity.safe_identity_error("identity_face_clear_failed")
+
+
+@app.post("/api/identity/clear-profile")
+async def api_identity_clear_profile(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        return identity.clear_face(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] clear-profile route failed")
+        return identity.safe_identity_error("identity_profile_clear_failed")
+
+
+@app.post("/api/identity/enroll-voice")
+async def api_identity_enroll_voice(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.enroll_voice(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] enroll-voice route failed")
+        return identity.safe_identity_error("identity_voice_enroll_failed")
+
+
+@app.post("/api/identity/verify-voice")
+async def api_identity_verify_voice(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.verify_voice(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] verify-voice route failed")
+        return identity.safe_identity_error("identity_voice_verify_failed")
+
+
+@app.post("/api/identity/fusion-check")
+async def api_identity_fusion_check(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.fusion_check(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] fusion-check route failed")
+        return identity.safe_identity_error("identity_fusion_check_failed")
+
+
+@app.post("/api/identity/test-effective-address")
+async def api_identity_test_effective_address(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.test_effective_address(body or {})
+    except Exception:
+        log.exception("[AURA IDENTITY] test-effective-address route failed")
+        return identity.safe_identity_error("identity_effective_address_test_failed")
+
+
+@app.post("/api/identity/event")
+async def api_identity_event(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return identity.event(body)
+    except Exception:
+        log.exception("[AURA IDENTITY] event route failed")
+        return identity.safe_identity_error("identity_event_failed")
+
+
+@app.get("/api/diagnostics/identity-status")
+async def api_diagnostics_identity_status() -> dict[str, Any]:
+    try:
+        return identity.status()
+    except Exception:
+        log.exception("[AURA IDENTITY] identity-status route failed")
+        return identity.safe_identity_error("identity_status_failed")
+
+
+@app.get("/api/diagnostics/identity-storage")
+async def api_diagnostics_identity_storage() -> dict[str, Any]:
+    try:
+        return identity.storage_status()
+    except Exception:
+        log.exception("[AURA IDENTITY] identity-storage route failed")
+        return identity.safe_identity_error("identity_storage_status_failed")
+
+
+@app.get("/api/diagnostics/voice-bench-memory")
+async def api_diagnostics_voice_bench_memory() -> dict[str, Any]:
+    return diagnostics.export_voice_bench_memory()
+
+
+@app.post("/api/diagnostics/voice-bench-memory/clear")
+async def api_diagnostics_voice_bench_memory_clear() -> dict[str, Any]:
+    return diagnostics.clear_voice_bench_memory()
+
+
+@app.get("/api/diagnostics/latency/latest")
+async def api_diagnostics_latency_latest() -> dict[str, Any]:
+    return diagnostics.latest_latency()
+
+
+@app.post("/api/diagnostics/export")
+async def api_diagnostics_export(body: dict[str, Any]) -> dict[str, Any]:
+    return diagnostics.export_report(body)
+
+
+@app.post("/api/tts/speak")
+async def api_tts_speak(body: dict[str, Any]) -> dict[str, Any]:
+    text = tts.truncate_for_tts(tts.strip_for_tts(str(body.get("text", ""))).strip())
+    tts_text, _pronunciation_alias_count = tts.apply_tts_pronunciation_aliases(text)
+    if "Sundar Ramakrishnan" in text and "Sundher Ramakrishnan" in tts_text:
+        logging.getLogger("jarvis.tts").info(
+            "[AURA TTS PRONUNCIATION] alias_applied target=trustee_sundar_ramakrishnan variant=sundher_no_long_a",
+        )
+    if "A. Soundarrajan" in text and "Ay Soundarrajan" in tts_text:
+        logging.getLogger("jarvis.tts").info(
+            "[AURA TTS PRONUNCIATION] alias_applied target=principal_a_soundarrajan variant=smooth_initial_no_pause",
+        )
+    text = tts_text
+    provider = str(body.get("provider", "chain")).strip().lower().replace("-", "_") or "chain"
+    include_audio = bool(body.get("include_audio", True))
+    timeout_seconds = body.get("timeout_seconds")
+    if not text:
+        return {
+            "ok": False,
+            "provider": provider,
+            "error_type": "empty_text",
+            "message": "No speakable response text was provided.",
+        }
+    if provider in ("chain", "auto", "default"):
+        result = await diagnostics.synthesize_tts_chain(text, include_audio=include_audio, purpose="api_tts_speak")
+    elif provider == "cartesia":
+        try:
+            timeout = float(timeout_seconds) if timeout_seconds is not None else diagnostics._cartesia_tts_chunk_timeout_seconds()
+        except (TypeError, ValueError):
+            timeout = diagnostics._cartesia_tts_chunk_timeout_seconds()
+        try:
+            result = await asyncio.wait_for(
+                diagnostics.synthesize_cartesia_audio(text, include_base64=include_audio, purpose="api_tts_speak", mode="voice_turn", force_live=True),
+                timeout=max(1.0, min(timeout, 30.0)),
+            )
+        except asyncio.TimeoutError:
+            result = {
+                "ok": False,
+                "provider": "cartesia",
+                "error_type": "cartesia_timeout",
+                "message": "Cartesia TTS timed out.",
+                "audio_bytes": 0,
+                "audio_base64": None,
+                "attempts": [{"provider": "cartesia", "attempted": True, "success": False, "error_type": "cartesia_timeout", "audio_bytes": 0}],
+            }
+    elif provider == "fish_audio":
+        result = await diagnostics.synthesize_fish_audio(text, include_base64=include_audio, purpose="api_tts_speak")
+    elif provider == "elevenlabs":
+        result = await diagnostics.synthesize_elevenlabs(text, include_audio=include_audio)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "ok": False,
+                "provider": provider,
+                "error_type": "unsupported_provider",
+                "message": "Supported TTS providers are auto, chain, cartesia, fish_audio, and elevenlabs.",
+            },
+        )
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "provider": result.get("provider") or provider,
+            "error_type": result.get("error_type") or result.get("error") or "tts_chain_audio_missing",
+            "message": result.get("message") or "Cloud TTS failed.",
+            "voice_id_present": bool(result.get("voice_id_present")),
+            "reference_id_present": bool(result.get("reference_id_present")),
+            "latency_ms": result.get("latency_ms"),
+            "selected_client": result.get("selected_client"),
+            "attempts": result.get("tts_provider_attempts", result.get("attempts", [])),
+            "tts_debug": result.get("tts_debug", {}),
+        }
+    return {
+        "ok": True,
+        "provider": result.get("provider") or provider,
+        "audio_base64": result.get("audio_base64") if include_audio else None,
+        "mime_type": result.get("mime_type") or "audio/mpeg",
+        "audio_bytes": result.get("audio_bytes"),
+        "latency_ms": result.get("latency_ms"),
+        "voice_id_present": bool(result.get("voice_id_present")),
+        "reference_id_present": bool(result.get("reference_id_present")),
+        "selected_client": result.get("selected_client"),
+        "attempts": result.get("tts_provider_attempts", result.get("attempts", [])),
+        "tts_debug": result.get("tts_debug", {}),
     }
 
 
@@ -720,6 +1257,65 @@ async def api_memory_delete(key: str) -> dict[str, Any]:
 
     await memory.delete(key)
     return {"ok": True}
+
+
+@app.get("/api/memory/status")
+async def api_persistent_memory_status() -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    return get_memory_manager().memory_status()
+
+
+@app.get("/api/memory/context-preview")
+async def api_persistent_memory_context_preview(conversation_id: str | None = None, query: str | None = None) -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    return get_memory_manager().context_preview(conversation_id, query)
+
+
+@app.get("/api/memory/facts")
+async def api_persistent_memory_facts(limit: int = 50) -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    return get_memory_manager().list_facts(limit=limit)
+
+
+@app.post("/api/memory/facts")
+async def api_persistent_memory_fact_create(body: dict[str, Any]) -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    fact = str((body or {}).get("fact") or "").strip()
+    if not fact:
+        return {"ok": False, "error": "fact is required"}
+    category = str((body or {}).get("category") or "user_profile").strip() or "user_profile"
+    return get_memory_manager().upsert_memory_fact(
+        category,
+        fact,
+        float((body or {}).get("confidence") or 0.8),
+        int((body or {}).get("importance") or 3),
+    )
+
+
+@app.patch("/api/memory/facts/{fact_id}")
+async def api_persistent_memory_fact_update(fact_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    return get_memory_manager().update_fact(fact_id, dict(body or {}))
+
+
+@app.post("/api/memory/test-write")
+async def api_persistent_memory_test_write() -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    result = get_memory_manager().upsert_memory_fact("diagnostics", "persistent memory diagnostic write")
+    return {"ok": bool(result.get("ok")), "result": result}
+
+
+@app.post("/api/memory/local-fallback/clear")
+async def api_persistent_memory_clear_local_fallback() -> dict[str, Any]:
+    from .memory import get_memory_manager
+
+    return get_memory_manager().clear_local_fallback()
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1572,6 +2168,7 @@ async def wake_word_loop() -> None:
 async def _on_startup() -> None:
     log.info("JARVIS online — backend=hermes, model=%s, mode=%s",
              llm.get_active_model(), _current_mode)
+    log.info("[AURA IDENTITY] routes registered")
 
     # Restore previous session history
     prev = _load_history()
@@ -1596,6 +2193,13 @@ async def _on_startup() -> None:
 
     _create_task(_prewarm_stt())
     _create_task(wake_word_loop())
+    async def _prewarm_wake_tts() -> None:
+        try:
+            await asyncio.sleep(1)
+            await diagnostics.synthesize_tts_chain("Awake, Sir.", include_audio=True, purpose="wake_prewarm", mode="voice_turn")
+        except Exception as exc:
+            log.debug("TTS wake pre-warm skipped: %s", exc)
+    _create_task(_prewarm_wake_tts())
     # Pre-warm the cloud LLM so the user's first typed question doesn't pay
     # the model's cold-start cost (typically 2-4s on Ollama Cloud).
     from .hermes_client import warmup_model

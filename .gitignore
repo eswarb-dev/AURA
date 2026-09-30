@@ -32,6 +32,21 @@ pip-wheel-metadata/
 *.pcm
 diagnostics/memory/
 diagnostics/tools/*.jsonl
+diagnostics/**/*.json
+diagnostics/**/*.jsonl
+
+# ── Generated project notes and exports ────────────────────────────────────
+# Keep repository docs intentionally small: one root README only.
+*.md
+!README.md
+AURA_VOICE_EXPORT/
+MASTER_README.md
+docs/*.md
+docs/**/*.md
+jarvis/web/README.md
+whatsapp-mcp/README.md
+scripts/prove_*
+scripts/test_tts_network.ps1
 
 # ── Claude Code settings ───────────────────────────────────────────────────
 .claude/settings.local.json
@@ -66,6 +81,12 @@ openwakeword/
 models/
 *.bin
 *.safetensors
+!jarvis/web/public/models/
+!jarvis/web/public/models/mediapipe/
+!jarvis/web/public/models/mediapipe/wasm/
+!jarvis/web/public/models/mediapipe/face_detector_short_range.tflite
+!jarvis/web/public/models/mediapipe/wasm/*.js
+!jarvis/web/public/models/mediapipe/wasm/*.wasm
 
 # ── Logs ───────────────────────────────────────────────────────────────────
 *.log

@@ -92,10 +92,13 @@ function SettingsPanel() {
   const mode = useJarvisStore((s) => s.mode)
   const send = useJarvisStore((s) => s.send)
   const pushToast = useJarvisStore((s) => s.pushToast)
+  const audioOutput = useJarvisStore((s) => s.audioOutput)
+  const unlockAudio = useJarvisStore((s) => s.unlockAudio)
 
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     (typeof localStorage !== 'undefined' && localStorage.getItem('cosmo-theme') as any) || 'dark'
   )
+  const [ttsStatus, setTtsStatus] = useState<{ provider: string; priority: string; cartesiaReady: boolean; fishReady: boolean; elevenReady: boolean } | null>(null)
 
   useEffect(() => {
     try {
@@ -103,6 +106,27 @@ function SettingsPanel() {
       document.documentElement.classList.toggle('theme-light', theme === 'light')
     } catch { /* noop */ }
   }, [theme])
+
+  useEffect(() => {
+    let alive = true
+    fetch('/api/diagnostics/providers')
+      .then((r) => r.json())
+      .then((data) => {
+        if (alive) {
+          setTtsStatus({
+            provider: data?.tts?.primary_provider || data?.tts?.provider || 'browser_speech',
+            priority: Array.isArray(data?.tts?.provider_priority) ? data.tts.provider_priority.join(', ') : 'cartesia, fish_audio, elevenlabs, browser_speech',
+            cartesiaReady: !!data?.cartesia?.configured,
+            fishReady: !!data?.fish_audio?.configured,
+            elevenReady: !!data?.elevenlabs?.voice_id_present,
+          })
+        }
+      })
+      .catch(() => {
+        if (alive) setTtsStatus(null)
+      })
+    return () => { alive = false }
+  }, [])
 
   const setModel = (m: string) => {
     send({ type: 'set_model', model: m })
@@ -154,23 +178,49 @@ function SettingsPanel() {
 
       <section>
         <h4 className="mb-2 font-display text-[11px] uppercase tracking-[0.2em] text-[var(--blue)]">Voice</h4>
-        <div className="rounded-sm border border-[var(--line-bright)] bg-black/30 px-3 py-2 font-mono text-[10.5px]">
-          Wake: "hey cosmo" (or "hey jarvis" — both work)
+        <div className="space-y-1 rounded-sm border border-[var(--line-bright)] bg-black/30 px-3 py-2 font-mono text-[10.5px]">
+          <div>Wake: "Wakeup" (legacy "hey AURA" also works)</div>
+          <div className={ttsStatus?.cartesiaReady || ttsStatus?.fishReady ? 'text-[var(--green)]' : 'text-[var(--amber)]'}>
+            Active TTS: {ttsStatus ? ttsStatus.provider : 'checking'}
+          </div>
+          <div>Provider priority: {ttsStatus?.priority || 'checking'}</div>
+          <div>Cartesia Sonic: {ttsStatus ? (ttsStatus.cartesiaReady ? 'configured' : 'missing') : 'checking'}</div>
+          <div>Fish Audio: {ttsStatus ? (ttsStatus.fishReady ? 'configured' : 'missing') : 'checking'}</div>
+          <div>ElevenLabs Voice ID: {ttsStatus ? (ttsStatus.elevenReady ? 'present' : 'missing') : 'checking'}</div>
+          <div>Browser audio: {audioOutput.unlocked ? 'unlocked' : 'click to unlock'}</div>
+          {audioOutput.lastError && <div className="text-[var(--red)]">Audio: {audioOutput.lastError}</div>}
+          <button
+            type="button"
+            onClick={() => unlockAudio()}
+            className="mt-2 rounded-sm border border-[var(--line-bright)] px-2 py-1 uppercase tracking-[0.16em] text-[var(--text-dim)] hover:border-[var(--blue)] hover:text-[var(--blue)]"
+          >
+            Unlock Audio
+          </button>
         </div>
       </section>
 
       <section>
         <h4 className="mb-2 font-display text-[11px] uppercase tracking-[0.2em] text-[var(--blue)]">About</h4>
         <div className="rounded-sm border border-[var(--line-bright)] bg-black/30 px-3 py-2 font-mono text-[10.5px] leading-relaxed text-[var(--text-dim)]">
-          <div className="text-[var(--text)]">Cosmo</div>
-          <div>Honest, direct, slightly profane. Your partner on the wire.</div>
-          <div className="mt-2 text-[var(--text-faint)]">Brain: Hermes Agent · Voice: Piper TTS</div>
+          <div className="text-[var(--text)]">A.U.R.A</div>
+          <div>Formal, composed, precise local AI operator.</div>
+          <div className="mt-2 text-[var(--text-faint)]">Brain: Hermes Agent · Voice: Cloud TTS chain</div>
         </div>
       </section>
 
       <section>
         <h4 className="mb-2 font-display text-[11px] uppercase tracking-[0.2em] text-[var(--blue)]">Admin</h4>
         <AdminStatusCard />
+      </section>
+
+      <section>
+        <h4 className="mb-2 font-display text-[11px] uppercase tracking-[0.2em] text-[var(--blue)]">Diagnostics</h4>
+        <a
+          href="/diagnostics"
+          className="block rounded-sm border border-[var(--line-bright)] bg-black/30 px-3 py-2 text-center font-mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--text-dim)] transition hover:border-[var(--blue)] hover:text-[var(--blue)]"
+        >
+          Run Voice Diagnostics
+        </a>
       </section>
     </div>
   )

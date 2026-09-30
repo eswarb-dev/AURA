@@ -1,7 +1,7 @@
-﻿# JARVIS — single entry point.
+# A.U.R.A - single entry point.
 #
-# First run:  installs Hermes Agent + JARVIS deps via the bootstrap wizard.
-# Later runs: starts Hermes gateway, then JARVIS voice server.
+# First run:  installs Hermes Agent + A.U.R.A deps via the bootstrap wizard.
+# Later runs: starts Hermes gateway, then A.U.R.A voice server.
 #
 # Usage:
 #   .\start.ps1                   # normal start (gateway + voice server)
@@ -26,30 +26,33 @@ Set-Location $ScriptDir
 
 $PidFile = Join-Path $ScriptDir '.jarvis.pids'
 
-function Write-Status($msg) { Write-Host "[jarvis] $msg" -ForegroundColor Cyan }
-function Write-Warn_($msg) { Write-Host "[jarvis] $msg" -ForegroundColor Yellow }
+function Write-Status($msg) { Write-Host "[aura] $msg" -ForegroundColor Cyan }
+function Write-Warn_($msg) { Write-Host "[aura] $msg" -ForegroundColor Yellow }
 
-# ── 1. Pick a Python ──────────────────────────────────────────────────────
+# 1. Pick a Python
 $python = $null
 foreach ($cand in @('python', 'py')) {
-    if (Get-Command $cand -ErrorAction SilentlyContinue) { $python = $cand; break }
+    if (Get-Command $cand -ErrorAction SilentlyContinue) {
+        $python = $cand
+        break
+    }
 }
 if (-not $python) {
     Write-Error "Python not found. Install it from https://www.python.org/downloads/ (check 'Add to PATH') and re-run."
     exit 1
 }
 
-# ── 2. Ensure JARVIS venv exists ─────────────────────────────────────────
+# 2. Ensure A.U.R.A venv exists
 $VenvDir = Join-Path $ScriptDir '.venv'
 $VenvPython = Join-Path $VenvDir 'Scripts\python.exe'
 if (-not (Test-Path $VenvPython)) {
-    Write-Status "Creating JARVIS virtualenv at $VenvDir ..."
+    Write-Status "Creating A.U.R.A virtualenv at $VenvDir ..."
     & $python -m venv $VenvDir
     & $VenvPython -m pip install --upgrade pip
     & $VenvPython -m pip install -r (Join-Path $ScriptDir 'requirements.txt')
 }
 
-# ── 3. Bootstrap (first run / forced) ─────────────────────────────────────
+# 3. Bootstrap (first run / forced)
 $ConfiguredFlag = Join-Path $ScriptDir '.jarvis.configured'
 if ($Bootstrap -or -not (Test-Path $ConfiguredFlag)) {
     Write-Status "Running bootstrap wizard ..."
@@ -58,7 +61,7 @@ if ($Bootstrap -or -not (Test-Path $ConfiguredFlag)) {
     Set-Content -Path $ConfiguredFlag -Value (Get-Date -Format 'o')
 }
 
-# ── 4. Optional frontend rebuild ─────────────────────────────────────────
+# 4. Optional frontend rebuild
 if ($RebuildFrontend) {
     Write-Status "Rebuilding frontend (npm run build) ..."
     Push-Location (Join-Path $ScriptDir 'jarvis\web')
@@ -66,33 +69,39 @@ if ($RebuildFrontend) {
         if (-not (Test-Path 'node_modules')) { npm install }
         npm run build
         if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
-    } finally { Pop-Location }
+    } finally {
+        Pop-Location
+    }
 }
 
-# ── 5. Start Hermes gateway ───────────────────────────────────────────────
+# 5. Start Hermes gateway
 if (-not $SkipGateway) {
     Write-Status "Starting Hermes gateway ..."
     $GatewayScript = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Hermes_Gateway.vbs'
     if (-not (Test-Path $GatewayScript)) {
-        Write-Warn_ "Startup script not found at $GatewayScript — gateway must be started manually."
+        Write-Warn_ "Startup script not found at $GatewayScript - gateway must be started manually."
     } else {
-        # Kill any pre-existing gateway first so the new one binds 8642.
-        Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+        Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -like '*gateway*' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 2
+
         Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$GatewayScript`"" -WindowStyle Hidden
-        # Wait for /health
+
         $Ready = $false
         for ($i = 1; $i -le 30; $i++) {
             try {
-                $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8642/health' -UseBasicParsing -TimeoutSec 2 -Headers @{'Authorization'='Bearer health'}
-                if ($r.StatusCode -eq 200) { $Ready = $true; break }
+                $headers = @{ Authorization = 'Bearer health' }
+                $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8642/health' -UseBasicParsing -TimeoutSec 2 -Headers $headers
+                if ($r.StatusCode -eq 200) {
+                    $Ready = $true
+                    break
+                }
             } catch { }
             Start-Sleep -Seconds 1
         }
         if (-not $Ready) {
-            Write-Warn_ "Hermes gateway did not respond on :8642 within 30s — continuing anyway."
+            Write-Warn_ "Hermes gateway did not respond on :8642 within 30s - continuing anyway."
         } else {
             Write-Status "Hermes gateway ready on :8642."
         }
@@ -101,10 +110,10 @@ if (-not $SkipGateway) {
 
 if ($OnlyGateway) { exit 0 }
 
-# ── 6. Start JARVIS voice server ──────────────────────────────────────────
+# 6. Start A.U.R.A voice server
 $Svc = Get-Service 'JarvisVoiceServer' -ErrorAction SilentlyContinue
 if ($Svc) {
-    Write-Status "JARVIS voice server is registered as a Windows Service (LOCAL SYSTEM)."
+    Write-Status "A.U.R.A voice server is registered as a Windows Service (LOCAL SYSTEM)."
     if ($Svc.Status -ne 'Running') {
         Write-Status "Starting service..."
         Start-Service 'JarvisVoiceServer'
@@ -114,10 +123,10 @@ if ($Svc) {
     Write-Status "Service status: $($Svc.Status)"
     $Proc = $null
 } else {
-    Write-Status "Starting JARVIS voice server on :8765 (foreground process) ..."
+    Write-Status "Starting A.U.R.A voice server on :8765 (foreground process) ..."
     Write-Warn_ "Tip: run .\install_service.ps1 once to register as a Windows Service (LOCAL SYSTEM, no UAC)."
-    # Kill any pre-existing uvicorn bound to 8765
-    Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*uvicorn*' -or $_.CommandLine -like '*jarvis.main*' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
@@ -125,27 +134,36 @@ if ($Svc) {
     $Uvicorn = Join-Path $VenvDir 'Scripts\uvicorn.exe'
     $Proc = Start-Process -FilePath $Uvicorn `
         -ArgumentList @('jarvis.main:app', '--host', '127.0.0.1', '--port', '8765', '--workers', '1', '--timeout-keep-alive', '75') `
+        -WorkingDirectory $ScriptDir `
         -WindowStyle Hidden -PassThru
-    Write-Status "JARVIS PID = $($Proc.Id)"
+    Write-Status "A.U.R.A PID = $($Proc.Id)"
+    Start-Sleep -Seconds 1
+    $Proc.Refresh()
+    if ($Proc.HasExited) {
+        throw "A.U.R.A voice server process exited during startup. Port 8765 may already be owned by a stale process."
+    }
 }
 
-# ── 7. Wait for voice server /health ──────────────────────────────────────
+# 7. Wait for voice server /health
 $VoiceReady = $false
 for ($i = 1; $i -le 30; $i++) {
     try {
         $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/healthz' -UseBasicParsing -TimeoutSec 2
-        if ($r.StatusCode -eq 200) { $VoiceReady = $true; break }
+        if ($r.StatusCode -eq 200) {
+            $VoiceReady = $true
+            break
+        }
     } catch { }
     Start-Sleep -Seconds 1
 }
 if (-not $VoiceReady) {
-    Write-Warn_ "JARVIS voice server did not respond on :8765 within 30s."
+    Write-Warn_ "A.U.R.A voice server did not respond on :8765 within 30s."
 } else {
-    Write-Status "JARVIS voice server ready on :8765 — open http://127.0.0.1:8765/ in your browser."
+    Write-Status "A.U.R.A voice server ready on :8765 - open http://127.0.0.1:8765/ in your browser."
 }
 
 # Save PIDs for stop.ps1
-$GatewayPids = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+$GatewayPids = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like '*gateway*' } |
     ForEach-Object { $_.ProcessId })
 $VoicePid = if ($Proc) { $Proc.Id } else { '' }

@@ -1,10 +1,10 @@
-/* JARVIS Web HUD client.
+/* A.U.R.A Web HUD client.
    - Connects to /ws.
    - Streams tokens char-by-char into the Thinking panel.
    - Renders the ATE task tracker (plan / step / complete).
    - Streams clean tag-free text into the Response panel.
    - Shows tool_call / tool_result rows in the Actions panel.
-   - Drives the waveform / reactor animation while JARVIS is speaking.
+   - Drives the waveform / reactor animation while A.U.R.A is speaking.
 */
 
 const $ = (id) => document.getElementById(id);
@@ -603,10 +603,10 @@ function handleMessage(msg) {
       shutdownBtn.textContent = "OFFLINE";
       shutdownBtn.classList.add("offline");
       els.statConn.classList.remove("linked");
-      toast("JARVIS is shutting down", "err", 6000);
+      toast("A.U.R.A is shutting down", "err", 6000);
       break;
     case "error":
-      console.error("JARVIS error:", msg.message);
+      console.error("A.U.R.A error:", msg.message);
       els.respState.textContent = "ERR";
       els.respState.classList.add("err");
       toast(msg.message || "An error occurred", "err", 6000);
@@ -662,7 +662,7 @@ stopBtn.addEventListener("click", () => {
 
 const shutdownBtn = $("shutdown-btn");
 shutdownBtn.addEventListener("click", () => {
-  if (!confirm("Shut down JARVIS completely?")) return;
+  if (!confirm("Shut down A.U.R.A completely?")) return;
   shutdownBtn.textContent = "OFFLINE";
   shutdownBtn.classList.add("offline");
   fetch("/api/shutdown", { method: "POST" }).catch(() => {});

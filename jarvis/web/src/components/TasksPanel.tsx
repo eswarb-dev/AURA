@@ -41,7 +41,12 @@ function TasksPanel() {
             </ul>
           </div>
         ) : (
-          <div className="text-[var(--text-dim)] text-[11px]">No active task.</div>
+          <div className="rounded-sm border border-[var(--line)] bg-black/20 p-3 text-[var(--text-dim)] font-mono text-[11px] space-y-1">
+            <div className="text-[var(--text)] font-semibold uppercase tracking-wider text-[10.5px]">No active tasks.</div>
+            <div className="text-[10px] text-[var(--text-faint)] leading-relaxed">
+              Voice commands and tracking actions will appear here.
+            </div>
+          </div>
         )}
       </section>
 

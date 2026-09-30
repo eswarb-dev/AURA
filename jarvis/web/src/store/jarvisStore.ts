@@ -1,4 +1,12 @@
 import { create } from 'zustand'
+import {
+  fetchCloudTtsSpeech,
+  getAuraAudioState,
+  playAuraAudioBlob,
+  speakWithBrowserSpeech,
+  unlockAuraAudio,
+  type AuraAudioState,
+} from '@/lib/audioOutput'
 
 export type ToolCall = {
   id: string
@@ -13,6 +21,9 @@ export type ToolCall = {
 export type TranscriptTurn = {
   id: string
   text: string
+  rawText?: string
+  normalizedText?: string
+  normalization?: any
   voice: boolean
   time: number
 }
@@ -76,6 +87,8 @@ interface JarvisState {
   listening: boolean
   wakeFlash: number
   toasts: { id: string; message: string; kind: string }[]
+  audioOutput: AuraAudioState
+  audioLogs: string[]
 
   send: (obj: Record<string, unknown>) => void
   sendText: (text: string, voice?: boolean) => void
@@ -89,12 +102,29 @@ interface JarvisState {
   setListening: (v: boolean) => void
   pushToast: (message: string, kind?: string) => void
   dismissToast: (id: string) => void
+  unlockAudio: () => Promise<void>
+  speakAuraResponse: (text: string) => Promise<void>
+  pushAudioLog: (stage: string, detail?: Record<string, unknown>) => void
 }
 
 let ws: WebSocket | null = null
 let reconnectDelay = 800
 let nextId = 0
 const genId = () => `id-${Date.now()}-${nextId++}`
+let lastSpokenTurnText = ''
+
+function shortSpeakableText(text: string): string {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  if (!clean) return ''
+  const sentence = clean.match(/^(.{12,}?[.!?])\s/)?.[1]
+  const first = sentence || clean.split(/(?<=[.!?])\s+/)[0] || clean
+  if (first.length <= 420) return first
+  return `${first.slice(0, 380).replace(/\s+\S*$/, '')}. Full details are on screen.`
+}
+
+function traceAudio(stage: string, detail?: Record<string, unknown>) {
+  useJarvisStore.getState().pushAudioLog(stage, detail)
+}
 
 export const useJarvisStore = create<JarvisState>((set, get) => ({
   connected: false,
@@ -123,6 +153,8 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
   listening: false,
   wakeFlash: 0,
   toasts: [],
+  audioOutput: getAuraAudioState(),
+  audioLogs: [],
 
   send: (obj) => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
@@ -155,6 +187,45 @@ export const useJarvisStore = create<JarvisState>((set, get) => ({
     setTimeout(() => get().dismissToast(id), 4200)
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  pushAudioLog: (stage, detail) => {
+    const label = detail?.error ? `${stage}: ${detail.error}` : stage
+    set((s) => ({
+      audioOutput: getAuraAudioState(),
+      audioLogs: [`${new Date().toLocaleTimeString('en-GB')} ${label}`, ...s.audioLogs].slice(0, 80),
+    }))
+  },
+  unlockAudio: async () => {
+    await unlockAuraAudio(traceAudio)
+    set({ audioOutput: getAuraAudioState() })
+  },
+  speakAuraResponse: async (text) => {
+    const speakable = shortSpeakableText(text)
+    if (!speakable || speakable === lastSpokenTurnText) return
+    lastSpokenTurnText = speakable
+    const wasListening = get().listening
+    set({ listening: false, speaking: true, reactor: 'SPEAK' })
+    traceAudio('tts.self_transcription.paused')
+    traceAudio('tts.request.started')
+    try {
+      const fetched = await fetchCloudTtsSpeech(speakable)
+      set({ audioOutput: { ...getAuraAudioState(), lastText: speakable, lastLatencyMs: fetched.latencyMs, lastAudioBytes: fetched.audioBytes, lastMimeType: fetched.mimeType, lastError: fetched.error } })
+      if (fetched.ok && fetched.audioBlob) {
+        traceAudio('tts.provider.cloud_audio', { provider: fetched.provider, audio_bytes: fetched.audioBytes || 0 })
+        await playAuraAudioBlob(fetched.audioBlob, fetched.mimeType || 'audio/mpeg', traceAudio, fetched.provider)
+        if (!getAuraAudioState().lastError) return
+      }
+      traceAudio('tts.fallback.used', { error: fetched.error || 'no_audio' })
+      await speakWithBrowserSpeech(speakable, traceAudio)
+    } catch (e: any) {
+      traceAudio('tts.fallback.used', { error: e?.message || 'tts request failed' })
+      await speakWithBrowserSpeech(speakable, traceAudio)
+    } finally {
+      const latest = getAuraAudioState()
+      set({ audioOutput: { ...latest, lastText: speakable }, speaking: false, reactor: get().turnActive ? 'THINK' : 'ONLINE' })
+      if (wasListening) set({ listening: true })
+      traceAudio('tts.self_transcription.resumed')
+    }
+  },
 }))
 
 const MODEL_LABELS: Record<string, string> = {
@@ -239,15 +310,15 @@ function handleMessage(msg: any) {
       if (msg.model) set({ activeModel: msg.model })
       if (msg.mode) set({ mode: msg.mode })
       // Surface admin status as a toast so the operator can see
-      // at a glance whether Cosmo is running elevated or not.
+      // at a glance whether A.U.R.A is running elevated or not.
       if (msg.admin) {
         const a = msg.admin
         if (a.is_local_system) {
-          get().pushToast('cosmo: LOCAL SYSTEM — full admin on this box', 'ok')
+          get().pushToast('A.U.R.A: LOCAL SYSTEM — full admin on this box', 'ok')
         } else if (a.is_admin || a.can_manage_services) {
-          get().pushToast(`cosmo: elevated (${a.username || 'admin'})`, 'ok')
+          get().pushToast(`A.U.R.A: elevated (${a.username || 'admin'})`, 'ok')
         } else {
-          get().pushToast('cosmo: unprivileged session', 'warn')
+          get().pushToast('A.U.R.A: unprivileged session', 'warn')
         }
       }
       break
@@ -286,7 +357,15 @@ function handleMessage(msg: any) {
       break
     case 'transcript':
       set((s) => ({
-        transcript: [...s.transcript, { id: genId(), text: msg.text, voice: !!msg.voice, time: Date.now() }],
+        transcript: [...s.transcript, {
+          id: genId(),
+          text: msg.text,
+          rawText: msg.raw_text,
+          normalizedText: msg.normalized_text,
+          normalization: msg.normalization,
+          voice: !!msg.voice,
+          time: Date.now(),
+        }],
       }))
       break
     case 'turn_start':
@@ -304,13 +383,17 @@ function handleMessage(msg: any) {
       break
     case 'turn_end': {
       const live = get().responseLive
+      const finalText = typeof msg.final_text === 'string' && msg.final_text.trim() ? msg.final_text : live
       set((s) => ({
         reactor: 'DONE',
         turnActive: false,
         responseState: 'ready',
-        responseTurns: live.trim() ? [...s.responseTurns, { id: genId(), text: live }] : s.responseTurns,
+        responseTurns: finalText.trim() ? [...s.responseTurns, { id: genId(), text: finalText }] : s.responseTurns,
         responseLive: '',
       }))
+      if (finalText.trim()) {
+        get().speakAuraResponse(finalText).catch((e) => get().pushAudioLog('tts.audio.play.failed', { error: e?.message || 'response speech failed' }))
+      }
       break
     }
     case 'stopped': {
@@ -364,7 +447,7 @@ function handleMessage(msg: any) {
       break
     case 'shutdown':
       set({ reactor: 'OFFLINE', connected: false })
-      get().pushToast('JARVIS is shutting down', 'err')
+      get().pushToast('A.U.R.A is shutting down', 'err')
       break
     case 'wizard_request':
       if (msg.intent === 'create_project') {

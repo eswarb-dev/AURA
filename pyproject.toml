@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jarvis-ai"
+name = "aura"
 version = "1.0.0"
-description = "Local voice/text AI assistant — Claude Agent SDK + Hyprland + piper TTS"
+description = "A.U.R.A - Adaptive Universal Responsive Agent HUD and voice server."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -20,6 +20,7 @@ dependencies = [
     "numpy>=1.26,<2; python_version < '3.13'",
     "numpy>=2; python_version >= '3.13'",
     "edge-tts>=6.1.9",
+    "supabase>=2.10",
     "uvloop>=0.17; sys_platform != 'win32'",
     "httptools>=0.6; sys_platform != 'win32'",
 ]
@@ -45,9 +46,9 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [project.urls]
-Homepage = "https://github.com/EliseyRotar/jarvis-ai"
-Repository = "https://github.com/EliseyRotar/jarvis-ai"
-Issues = "https://github.com/EliseyRotar/jarvis-ai/issues"
+Homepage = "https://github.com/eswarb-dev/AURA"
+Repository = "https://github.com/eswarb-dev/AURA"
+Issues = "https://github.com/eswarb-dev/AURA/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

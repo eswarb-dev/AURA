@@ -5,7 +5,7 @@ import type { TrackerStatus } from '@/lib/handTracker'
 
 /**
  * Holographic wireframe orb (Three.js) — ported from the ULTRON orb UI and
- * wired to JARVIS's live state. Reads the Zustand store inside the rAF loop
+ * wired to A.U.R.A's live state. Reads the Zustand store inside the rAF loop
  * (never via React props) so it animates at 60fps without re-rendering.
  *
  * three.js + MediaPipe are lazy-loaded (dynamic import) so the classic HUD
@@ -26,6 +26,30 @@ export function OrbCanvas() {
   const [gestures, setGestures] = useState(false)
   const [gestureStatus, setGestureStatus] = useState<TrackerStatus>({ hands: 0, mode: 'idle' })
   const [gestureError, setGestureError] = useState('')
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('aura-gesture-tracking-status', {
+      detail: {
+        gesture_tracking_state: gestures ? (gestureError ? 'error' : 'active') : 'off',
+        gesture_tracking_error: gestureError ? {
+          code: 'hand_detector_init',
+          safe_message: 'Gesture control could not start',
+          stage: 'hand_detector_init',
+          timestamp: new Date().toISOString(),
+        } : null,
+      },
+    }))
+  }, [gestures, gestureError])
+
+  useEffect(() => {
+    const onCommand = (event: Event) => {
+      const action = (event as CustomEvent<{ action?: string }>).detail?.action
+      if (action === 'start') setGestures(true)
+      if (action === 'stop') setGestures(false)
+    }
+    window.addEventListener('aura-gesture-tracking-command', onCommand)
+    return () => window.removeEventListener('aura-gesture-tracking-command', onCommand)
+  }, [])
 
   useEffect(() => {
     const container = containerRef.current
@@ -111,8 +135,8 @@ export function OrbCanvas() {
   }, [])
 
   return (
-    <div className="relative h-full w-full">
-      <div ref={containerRef} className="absolute inset-0" />
+    <div className="relative h-full w-full pointer-events-auto">
+      <div ref={containerRef} className="absolute inset-0 pointer-events-auto cursor-grab active:cursor-grabbing" />
 
       {/* Hidden webcam feed for hand tracking */}
       <video ref={videoRef} className="hidden" playsInline muted />
@@ -127,7 +151,7 @@ export function OrbCanvas() {
             ? 'rounded-full border border-[var(--amber)] bg-black/40 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--amber)] backdrop-blur transition hover:opacity-80'
             : 'rounded-full border border-[var(--line-bright)] bg-black/40 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--text-faint)] backdrop-blur transition hover:border-[var(--blue)] hover:text-[var(--blue)]'}
         >
-          {gestures ? 'gestures on' : 'gestures off'}
+          {gestures ? 'gesture tracking on' : 'gesture tracking off'}
         </button>
         {gestures && !gestureError && (
           <span className="font-mono text-[9px] tracking-[0.15em] text-[var(--text-faint)]">

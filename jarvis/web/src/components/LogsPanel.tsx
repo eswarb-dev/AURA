@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { registerPanelContent } from './RadialMenu'
+import { useJarvisStore } from '@/store/jarvisStore'
 
 function LogsPanel() {
   const [entries, setEntries] = useState<{ time: number; level: string; msg: string }[]>([])
   const [auto, setAuto] = useState(true)
   const [filter, setFilter] = useState('')
+  const audioLogs = useJarvisStore((s) => s.audioLogs)
 
   useEffect(() => {
     let alive = true
@@ -37,6 +39,12 @@ function LogsPanel() {
         </label>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2 font-mono text-[10px] leading-snug">
+        {audioLogs.map((line, i) => (
+          <div key={`audio-${i}`} className="flex gap-2 border-b border-[var(--line)]/30 py-0.5 text-[var(--blue)]">
+            <span className="w-12 shrink-0 text-[var(--text-faint)]">AUDIO</span>
+            <span className="flex-1 break-all">{line}</span>
+          </div>
+        ))}
         {entries.length === 0 && <div className="text-[var(--text-faint)]">no log entries yet</div>}
         {entries.map((e, i) => (
           <div key={i} className="flex gap-2 border-b border-[var(--line)]/30 py-0.5" style={{ color: e.level === 'ERROR' ? 'var(--red)' : e.level === 'WARN' ? 'var(--amber)' : 'var(--text-dim)' }}>
